@@ -1,9 +1,11 @@
+
 name: Update World EPG
 
 on:
   schedule:
-    # รันทุกๆ 24 ชั่วโมง (เวลา 00:20 UTC หรือ 07:20 ไทย)
+    # ทุกวัน 07:20 น. เวลาไทย (00:20 UTC)
     - cron: "20 0 * * *"
+
   workflow_dispatch:
     inputs:
       days:
@@ -11,7 +13,7 @@ on:
         required: false
         default: "2"
       max_connections:
-        description: "Maximum concurrent requests to source websites"
+        description: "Maximum concurrent requests"
         required: false
         default: "4"
 
@@ -24,7 +26,7 @@ concurrency:
 
 jobs:
   update:
-    name: Grab, validate and publish targeted EPG
+    name: Grab, deduplicate, validate and publish TrueID EPG
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -54,67 +56,70 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           [[ "$EPG_DAYS" =~ ^[1-9][0-9]?$ ]] || {
             echo "::error::EPG_DAYS must be an integer between 1 and 99"
             exit 1
           }
+
           [[ "$MAX_CONNECTIONS" =~ ^[1-9][0-9]?$ ]] || {
             echo "::error::MAX_CONNECTIONS must be an integer between 1 and 99"
             exit 1
           }
 
       - name: Clone upstream iptv-org EPG engine
+        shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch master https://github.com/iptv-org/epg.git epg-engine
+
+          git clone \
+            --depth 1 \
+            --branch master \
+            https://github.com/iptv-org/epg.git \
+            epg-engine
 
       - name: Install EPG engine dependencies
         working-directory: epg-engine
         run: npm install --no-audit --no-fund
 
-      - name: Discover targeted EPG sources
+      - name: Select TrueID source only
         id: sources
         shell: bash
         run: |
           set -euo pipefail
 
-          # กรองเฉพาะเว็บไซต์ที่ลงท้ายด้วยรหัสประเทศที่ต้องการ:
-          # ไทย (.th), ญี่ปุ่น (.jp), เกาหลีใต้ (.kr), จีน (.cn), อินเดีย (.in)
-          # มาเลเซีย (.my), สิงคโปร์ (.sg), อินโดนีเซีย (.id)
-          # สหรัฐฯ (.us), แคนาดา (.ca), บราซิล (.br)
-          # อังกฤษ (.uk), เยอรมนี (.de), ฝรั่งเศส (.fr), สเปน (.es), อิตาลี (.it)
-          # ออสเตรเลีย (.au) หรือชื่อโดเมนสากล/เว็บกลางที่เกี่ยวข้อง
-          #TARGET_REGEX="(\.(th|jp|kr|cn|in|my|sg|us|uk|au))$"
-          TARGET_REGEX="(trueid)"
-
           mapfile -t SITES < <(
             find epg-engine/sites \
-              -mindepth 1 -maxdepth 1 \
+              -mindepth 1 \
+              -maxdepth 1 \
               -type d \
               -printf '%f\n' |
-            grep -E "$TARGET_REGEX" |
+            grep -i 'trueid' |
             sort -u
           )
 
-          if [ "${#SITES[@]}" -eq 0 ]; then
-            echo "::error::No matching EPG source configurations found for selected countries."
+          if [ "${#SITES[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one TrueID source, found ${#SITES[@]}."
+            printf '%s\n' "${SITES[@]}"
             exit 1
           fi
 
-          SITE_LIST=$(IFS=,; echo "${SITES[*]}")
-          echo "count=${#SITES[@]}" >> "$GITHUB_OUTPUT"
+          SITE_LIST="${SITES[0]}"
+
           echo "list=$SITE_LIST" >> "$GITHUB_OUTPUT"
+          echo "count=1" >> "$GITHUB_OUTPUT"
 
-          echo "Discovered ${#SITES[@]} targeted EPG sources."
-          printf '%s\n' "${SITES[@]}"
+          echo "Selected EPG source:"
+          echo "$SITE_LIST"
 
-      - name: Download targeted EPG
+      - name: Download TrueID EPG
         working-directory: epg-engine
         shell: bash
         env:
           SITE_LIST: ${{ steps.sources.outputs.list }}
         run: |
           set -euo pipefail
+
           mkdir -p "../$EPG_OUTPUT_DIR"
 
           npm run grab --- \
@@ -125,25 +130,58 @@ jobs:
             --days="$EPG_DAYS" \
             --maxConnections="$MAX_CONNECTIONS"
 
-      - name: Validate generated EPG files
+      - name: Deduplicate XMLTV data
+        shell: bash
         run: |
           set -euo pipefail
+
+          python scripts/dedupe.py \
+            epg/guide.xml \
+            epg/guide.xml
+
+      - name: Rebuild GZIP from deduplicated XML
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gzip -n -c epg/guide.xml > epg/guide.xml.gz
+
+          echo "GZIP rebuilt from deduplicated XML."
+
+      - name: Validate generated EPG files
+        shell: bash
+        run: |
+          set -euo pipefail
+
           python scripts/validate_epg.py epg
 
       - name: Show output sizes
+        shell: bash
         run: |
           set -euo pipefail
-          echo "EPG source configurations: ${{ steps.sources.outputs.count }}"
+
+          echo "EPG source: ${{ steps.sources.outputs.list }}"
           echo "Requested days: $EPG_DAYS"
           echo "Maximum connections: $MAX_CONNECTIONS"
+
+          echo ""
+          echo "Generated file sizes:"
           du -h epg/guide.xml epg/guide.xml.gz epg/guide.json
+
+          echo ""
           ls -lh epg/
 
       - name: Preserve generated files for publishing
+        shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p "$RUNNER_TEMP/world-epg-publish"
-          cp epg/guide.xml epg/guide.xml.gz epg/guide.json \
+
+          cp \
+            epg/guide.xml \
+            epg/guide.xml.gz \
+            epg/guide.json \
             "$RUNNER_TEMP/world-epg-publish/"
 
       - name: Publish data branch
@@ -155,16 +193,22 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git switch --orphan world-epg-publish
+
           git rm -rf --ignore-unmatch .
           git clean -fdx
 
           mkdir -p epg
+
           cp "$RUNNER_TEMP/world-epg-publish/guide.xml" epg/
           cp "$RUNNER_TEMP/world-epg-publish/guide.xml.gz" epg/
           cp "$RUNNER_TEMP/world-epg-publish/guide.json" epg/
 
-          git add epg/guide.xml epg/guide.xml.gz epg/guide.json
-          git commit -m "Update targeted EPG data"
+          git add \
+            epg/guide.xml \
+            epg/guide.xml.gz \
+            epg/guide.json
+
+          git commit -m "Update TrueID EPG data"
 
           git push origin HEAD:data --force
 
@@ -173,12 +217,14 @@ jobs:
         shell: bash
         run: |
           {
-            echo "## EPG Update Summary"
+            echo "## World EPG Update Summary"
             echo ""
-            echo "- Schedule: every 24 hours"
-            echo "- Sources discovered: ${{ steps.sources.outputs.count || 'not available' }}"
+            echo "- Source: TrueID only"
+            echo "- Schedule: Every 24 hours (07:20 Thailand time)"
+            echo "- Sources selected: ${{ steps.sources.outputs.count || 'not available' }}"
             echo "- Requested days: $EPG_DAYS"
             echo "- Maximum connections: $MAX_CONNECTIONS"
+            echo "- Deduplication: XMLTV"
             echo "- Data branch: \`data\`"
             echo ""
             echo "### Public guide URLs"
