@@ -85,7 +85,7 @@ jobs:
           # อังกฤษ (.uk), เยอรมนี (.de), ฝรั่งเศส (.fr), สเปน (.es), อิตาลี (.it)
           # ออสเตรเลีย (.au) หรือชื่อโดเมนสากล/เว็บกลางที่เกี่ยวข้อง
           #TARGET_REGEX="(\.(th|jp|kr|cn|in|my|sg|us|uk|au))$"
-          TARGET_REGEX="(\.(th))$"
+          TARGET_REGEX="(\.(3bb.co.th|trueid.net|ais.co.th))$"
 
           mapfile -t SITES < <(
             find epg-engine/sites \
