@@ -26,7 +26,7 @@ jobs:
   update:
     name: Grab, validate and publish targeted EPG
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 120
 
     env:
       EPG_DAYS: ${{ github.event.inputs.days || '2' }}
@@ -72,23 +72,31 @@ jobs:
         working-directory: epg-engine
         run: npm install --no-audit --no-fund
 
-      - name: Discover all EPG sources
+      - name: Discover targeted EPG sources
         id: sources
         shell: bash
         run: |
           set -euo pipefail
 
-          # ค้นหาและดึงรายชื่อ sites ทั้งหมดจาก engine โดยอัตโนมัติ
+          # กรองเฉพาะเว็บไซต์ที่ลงท้ายด้วยรหัสประเทศที่ต้องการ:
+          # ไทย (.th), ญี่ปุ่น (.jp), เกาหลีใต้ (.kr), จีน (.cn), อินเดีย (.in)
+          # มาเลเซีย (.my), สิงคโปร์ (.sg), อินโดนีเซีย (.id)
+          # สหรัฐฯ (.us), แคนาดา (.ca), บราซิล (.br)
+          # อังกฤษ (.uk), เยอรมนี (.de), ฝรั่งเศส (.fr), สเปน (.es), อิตาลี (.it)
+          # ออสเตรเลีย (.au) หรือชื่อโดเมนสากล/เว็บกลางที่เกี่ยวข้อง
+          TARGET_REGEX="(\.(th|jp|kr|cn|in|my|sg|id|us|ca|br|uk|de|fr|es|it|au))$"
+
           mapfile -t SITES < <(
             find epg-engine/sites \
               -mindepth 1 -maxdepth 1 \
               -type d \
               -printf '%f\n' |
+            grep -E "$TARGET_REGEX" |
             sort -u
           )
 
           if [ "${#SITES[@]}" -eq 0 ]; then
-            echo "::error::No EPG source configurations found."
+            echo "::error::No matching EPG source configurations found for selected countries."
             exit 1
           fi
 
@@ -96,7 +104,8 @@ jobs:
           echo "count=${#SITES[@]}" >> "$GITHUB_OUTPUT"
           echo "list=$SITE_LIST" >> "$GITHUB_OUTPUT"
 
-          echo "Discovered ${#SITES[@]} EPG sources."
+          echo "Discovered ${#SITES[@]} targeted EPG sources."
+          printf '%s\n' "${SITES[@]}"
 
       - name: Download targeted EPG
         working-directory: epg-engine
@@ -144,23 +153,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Create a new orphan commit so old large EPG files do not
-          # accumulate in the data branch history.
           git switch --orphan world-epg-publish
-
-          # Remove all tracked files from the orphan working tree.
           git rm -rf --ignore-unmatch .
           git clean -fdx
 
           mkdir -p epg
           cp "$RUNNER_TEMP/world-epg-publish/guide.xml" epg/
           cp "$RUNNER_TEMP/world-epg-publish/guide.xml.gz" epg/
-          cp "$RUNner_TEMP/world-epg-publish/guide.json" epg/
+          cp "$RUNNER_TEMP/world-epg-publish/guide.json" epg/
 
           git add epg/guide.xml epg/guide.xml.gz epg/guide.json
           git commit -m "Update targeted EPG data"
 
-          # Only the dedicated data branch is force-updated.
           git push origin HEAD:data --force
 
       - name: Job summary
