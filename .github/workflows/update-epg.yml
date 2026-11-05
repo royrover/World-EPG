@@ -72,32 +72,23 @@ jobs:
         working-directory: epg-engine
         run: npm install --no-audit --no-fund
 
-      - name: Discover targeted EPG sources
+      - name: Discover all EPG sources
         id: sources
         shell: bash
         run: |
           set -euo pipefail
 
-          # กรองเฉพาะประเทศที่คุณเลือก:
-          # เอเชีย: th, jp, kr, cn, in
-          # เอเชียตะวันออกเฉียงใต้: my, sg, id
-          # อเมริกา: us, ca, br
-          # ยุโรป: uk, de, fr, es, it
-          # โอเชียเนีย: au
-          TARGET_REGEX="^(th|jp|kr|cn|in|my|sg|id|us|ca|br|uk|de|fr|es|it|au)(\.|_|-|$)"
-
+          # ค้นหาและดึงรายชื่อ sites ทั้งหมดจาก engine โดยอัตโนมัติ
           mapfile -t SITES < <(
             find epg-engine/sites \
-              -mindepth 2 -maxdepth 2 \
-              -type f -name '*.config.js' \
-              -printf '%h\n' |
-            xargs -r -n1 basename |
-            grep -E "$TARGET_REGEX" |
+              -mindepth 1 -maxdepth 1 \
+              -type d \
+              -printf '%f\n' |
             sort -u
           )
 
           if [ "${#SITES[@]}" -eq 0 ]; then
-            echo "::error::No matching EPG source configurations found for selected countries."
+            echo "::error::No EPG source configurations found."
             exit 1
           fi
 
@@ -105,8 +96,7 @@ jobs:
           echo "count=${#SITES[@]}" >> "$GITHUB_OUTPUT"
           echo "list=$SITE_LIST" >> "$GITHUB_OUTPUT"
 
-          echo "Discovered ${#SITES[@]} targeted EPG sources."
-          printf '%s\n' "${SITES[@]}"
+          echo "Discovered ${#SITES[@]} EPG sources."
 
       - name: Download targeted EPG
         working-directory: epg-engine
