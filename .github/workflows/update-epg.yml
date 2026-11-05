@@ -84,7 +84,8 @@ jobs:
           # สหรัฐฯ (.us), แคนาดา (.ca), บราซิล (.br)
           # อังกฤษ (.uk), เยอรมนี (.de), ฝรั่งเศส (.fr), สเปน (.es), อิตาลี (.it)
           # ออสเตรเลีย (.au) หรือชื่อโดเมนสากล/เว็บกลางที่เกี่ยวข้อง
-          TARGET_REGEX="(\.(th|jp|kr|cn|in|my|sg|id|us|ca|br|uk|de|fr|es|it|au))$"
+          #TARGET_REGEX="(\.(th|jp|kr|cn|in|my|sg|us|uk|au))$"
+          TARGET_REGEX="(\.(th))$"
 
           mapfile -t SITES < <(
             find epg-engine/sites \
