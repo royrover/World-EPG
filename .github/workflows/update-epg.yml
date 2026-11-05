@@ -128,7 +128,9 @@ jobs:
             --gzip="../$EPG_OUTPUT_DIR/guide.xml.gz" \
             --json="../$EPG_OUTPUT_DIR/guide.json" \
             --days="$EPG_DAYS" \
-            --maxConnections="$MAX_CONNECTIONS"
+            --maxConnections="$MAX_CONNECTIONS" \
+            --curl
+
 
       - name: Deduplicate XMLTV data
         shell: bash
