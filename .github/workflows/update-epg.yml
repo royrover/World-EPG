@@ -1,0 +1,185 @@
+name: Update World EPG
+
+on:
+  schedule:
+    # Every 12 hours: 00:20 and 12:20 UTC
+    - cron: "20 0,12 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of days of TV listings to download"
+        required: false
+        default: "3"
+      max_connections:
+        description: "Maximum concurrent requests to source websites"
+        required: false
+        default: "4"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: world-epg-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Grab, validate and publish worldwide EPG
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      EPG_DAYS: ${{ github.event.inputs.days || '3' }}
+      MAX_CONNECTIONS: ${{ github.event.inputs.max_connections || '4' }}
+      EPG_OUTPUT_DIR: epg
+
+    steps:
+      - name: Checkout World-EPG
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check input values
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EPG_DAYS" =~ ^[1-9][0-9]?$ ]] || {
+            echo "::error::EPG_DAYS must be an integer between 1 and 99"
+            exit 1
+          }
+          [[ "$MAX_CONNECTIONS" =~ ^[1-9][0-9]?$ ]] || {
+            echo "::error::MAX_CONNECTIONS must be an integer between 1 and 99"
+            exit 1
+          }
+
+      - name: Clone upstream iptv-org EPG engine
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/iptv-org/epg.git epg-engine
+
+      - name: Install EPG engine dependencies
+        working-directory: epg-engine
+        run: npm install --no-audit --no-fund
+
+      - name: Discover all configured EPG sources
+        id: sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t SITES < <(
+            find epg-engine/sites \
+              -mindepth 2 -maxdepth 2 \
+              -type f -name '*.config.js' \
+              -printf '%h\n' |
+            xargs -r -n1 basename |
+            sort -u
+          )
+
+          if [ "${#SITES[@]}" -eq 0 ]; then
+            echo "::error::No EPG source configurations were found."
+            exit 1
+          fi
+
+          SITE_LIST=$(IFS=,; echo "${SITES[*]}")
+          echo "count=${#SITES[@]}" >> "$GITHUB_OUTPUT"
+          echo "list=$SITE_LIST" >> "$GITHUB_OUTPUT"
+
+          echo "Discovered ${#SITES[@]} configured EPG sources."
+          printf '%s\n' "${SITES[@]}"
+
+      - name: Download worldwide EPG
+        working-directory: epg-engine
+        shell: bash
+        env:
+          SITE_LIST: ${{ steps.sources.outputs.list }}
+        run: |
+          set -euo pipefail
+          mkdir -p "../$EPG_OUTPUT_DIR"
+
+          npm run grab --- \
+            --sites="$SITE_LIST" \
+            --output="../$EPG_OUTPUT_DIR/guide.xml" \
+            --gzip="../$EPG_OUTPUT_DIR/guide.xml.gz" \
+            --json="../$EPG_OUTPUT_DIR/guide.json" \
+            --days="$EPG_DAYS" \
+            --maxConnections="$MAX_CONNECTIONS"
+
+      - name: Validate generated EPG files
+        run: |
+          set -euo pipefail
+          python scripts/validate_epg.py epg
+
+      - name: Show output sizes
+        run: |
+          set -euo pipefail
+          echo "EPG source configurations: ${{ steps.sources.outputs.count }}"
+          echo "Requested days: $EPG_DAYS"
+          echo "Maximum connections: $MAX_CONNECTIONS"
+          du -h epg/guide.xml epg/guide.xml.gz epg/guide.json
+          ls -lh epg/
+
+      - name: Preserve generated files for publishing
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/world-epg-publish"
+          cp epg/guide.xml epg/guide.xml.gz epg/guide.json \
+            "$RUNNER_TEMP/world-epg-publish/"
+
+      - name: Publish data branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Create a new orphan commit so old large EPG files do not
+          # accumulate in the data branch history.
+          git switch --orphan world-epg-publish
+
+          # Remove all tracked files from the orphan working tree.
+          git rm -rf --ignore-unmatch .
+          git clean -fdx
+
+          mkdir -p epg
+          cp "$RUNNER_TEMP/world-epg-publish/guide.xml" epg/
+          cp "$RUNNER_TEMP/world-epg-publish/guide.xml.gz" epg/
+          cp "$RUNNER_TEMP/world-epg-publish/guide.json" epg/
+
+          git add epg/guide.xml epg/guide.xml.gz epg/guide.json
+          git commit -m "Update worldwide EPG data"
+
+          # Only the dedicated data branch is force-updated.
+          # The main branch and its source files are not rewritten.
+          git push origin HEAD:data --force
+
+      - name: Job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## World EPG update"
+            echo ""
+            echo "- Schedule: every 12 hours"
+            echo "- Sources discovered: ${{ steps.sources.outputs.count || 'not available' }}"
+            echo "- Requested days: $EPG_DAYS"
+            echo "- Maximum connections: $MAX_CONNECTIONS"
+            echo "- Data branch: \`data\`"
+            echo ""
+            echo "### Public guide URLs"
+            echo "- XML: https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/epg/guide.xml"
+            echo "- GZIP: https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/epg/guide.xml.gz"
+            echo "- JSON: https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/epg/guide.json"
+          } >> "$GITHUB_STEP_SUMMARY"

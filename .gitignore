@@ -1,0 +1,12 @@
+# Local generated EPG files
+epg/
+epg-engine/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Logs
+*.log
