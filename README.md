@@ -27,10 +27,14 @@ Replace `royrover` if the repository owner changes.
 
 ## Schedule
 
-The workflow runs at 00:20 and 12:20 UTC (07:20 and 19:20 Thailand time).
+The workflow runs daily at 00:20 UTC (07:20 Thailand time).
 
-GitHub Actions scheduled workflows can be delayed during periods of high load.
-Use **Actions → Update World EPG → Run workflow** to start an update manually.
+## Manual run options
+
+The workflow_dispatch form supports:
+
+- `days`: number of days of listings to request (default: 2)
+- `max_connections`: maximum concurrent source requests (default: 4)
 
 ## Manual run options
 

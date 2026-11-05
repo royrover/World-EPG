@@ -2,14 +2,14 @@ name: Update World EPG
 
 on:
   schedule:
-    # Every 12 hours: 00:20 and 12:20 UTC
-    - cron: "20 0,12 * * *"
+    # รันทุกๆ 24 ชั่วโมง (เวลา 00:20 UTC หรือ 07:20 ไทย)
+    - cron: "20 0 * * *"
   workflow_dispatch:
     inputs:
       days:
         description: "Number of days of TV listings to download"
         required: false
-        default: "3"
+        default: "2"
       max_connections:
         description: "Maximum concurrent requests to source websites"
         required: false
@@ -24,12 +24,12 @@ concurrency:
 
 jobs:
   update:
-    name: Grab, validate and publish worldwide EPG
+    name: Grab, validate and publish targeted EPG
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
     env:
-      EPG_DAYS: ${{ github.event.inputs.days || '3' }}
+      EPG_DAYS: ${{ github.event.inputs.days || '2' }}
       MAX_CONNECTIONS: ${{ github.event.inputs.max_connections || '4' }}
       EPG_OUTPUT_DIR: epg
 
@@ -72,11 +72,19 @@ jobs:
         working-directory: epg-engine
         run: npm install --no-audit --no-fund
 
-      - name: Discover all configured EPG sources
+      - name: Discover targeted EPG sources
         id: sources
         shell: bash
         run: |
           set -euo pipefail
+
+          # กรองเฉพาะประเทศที่คุณเลือก:
+          # เอเชีย: th, jp, kr, cn, in
+          # เอเชียตะวันออกเฉียงใต้: my, sg, id
+          # อเมริกา: us, ca, br
+          # ยุโรป: uk, de, fr, es, it
+          # โอเชียเนีย: au
+          TARGET_REGEX="^(th|jp|kr|cn|in|my|sg|id|us|ca|br|uk|de|fr|es|it|au)(\.|_|-|$)"
 
           mapfile -t SITES < <(
             find epg-engine/sites \
@@ -84,11 +92,12 @@ jobs:
               -type f -name '*.config.js' \
               -printf '%h\n' |
             xargs -r -n1 basename |
+            grep -E "$TARGET_REGEX" |
             sort -u
           )
 
           if [ "${#SITES[@]}" -eq 0 ]; then
-            echo "::error::No EPG source configurations were found."
+            echo "::error::No matching EPG source configurations found for selected countries."
             exit 1
           fi
 
@@ -96,10 +105,10 @@ jobs:
           echo "count=${#SITES[@]}" >> "$GITHUB_OUTPUT"
           echo "list=$SITE_LIST" >> "$GITHUB_OUTPUT"
 
-          echo "Discovered ${#SITES[@]} configured EPG sources."
+          echo "Discovered ${#SITES[@]} targeted EPG sources."
           printf '%s\n' "${SITES[@]}"
 
-      - name: Download worldwide EPG
+      - name: Download targeted EPG
         working-directory: epg-engine
         shell: bash
         env:
@@ -156,13 +165,12 @@ jobs:
           mkdir -p epg
           cp "$RUNNER_TEMP/world-epg-publish/guide.xml" epg/
           cp "$RUNNER_TEMP/world-epg-publish/guide.xml.gz" epg/
-          cp "$RUNNER_TEMP/world-epg-publish/guide.json" epg/
+          cp "$RUNner_TEMP/world-epg-publish/guide.json" epg/
 
           git add epg/guide.xml epg/guide.xml.gz epg/guide.json
-          git commit -m "Update worldwide EPG data"
+          git commit -m "Update targeted EPG data"
 
           # Only the dedicated data branch is force-updated.
-          # The main branch and its source files are not rewritten.
           git push origin HEAD:data --force
 
       - name: Job summary
@@ -170,9 +178,9 @@ jobs:
         shell: bash
         run: |
           {
-            echo "## World EPG update"
+            echo "## EPG Update Summary"
             echo ""
-            echo "- Schedule: every 12 hours"
+            echo "- Schedule: every 24 hours"
             echo "- Sources discovered: ${{ steps.sources.outputs.count || 'not available' }}"
             echo "- Requested days: $EPG_DAYS"
             echo "- Maximum connections: $MAX_CONNECTIONS"
