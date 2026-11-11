@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   update:
-    name: Grab, validate and publish targeted EPG
+    name: Grab, validate and publish per-source EPG
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -78,13 +78,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # กรองเฉพาะเว็บไซต์ที่ลงท้ายด้วยรหัสประเทศที่ต้องการ:
-          # ไทย (.th), ญี่ปุ่น (.jp), เกาหลีใต้ (.kr), จีน (.cn), อินเดีย (.in)
-          # มาเลเซีย (.my), สิงคโปร์ (.sg), อินโดนีเซีย (.id)
-          # สหรัฐฯ (.us), แคนาดา (.ca), บราซิล (.br)
-          # อังกฤษ (.uk), เยอรมนี (.de), ฝรั่งเศส (.fr), สเปน (.es), อิตาลี (.it)
-          # ออสเตรเลีย (.au) หรือชื่อโดเมนสากล/เว็บกลางที่เกี่ยวข้อง
-          #TARGET_REGEX="(\.(th|jp|kr|cn|in|my|sg|us|uk|au))$"
+          # แก้ regex ตรงนี้เพื่อเลือกแหล่งที่ต้องการ
           TARGET_REGEX="(trueid|3bb)"
 
           mapfile -t SITES < <(
@@ -97,7 +91,7 @@ jobs:
           )
 
           if [ "${#SITES[@]}" -eq 0 ]; then
-            echo "::error::No matching EPG source configurations found for selected countries."
+            echo "::error::No matching EPG source configurations found."
             exit 1
           fi
 
@@ -108,7 +102,8 @@ jobs:
           echo "Discovered ${#SITES[@]} targeted EPG sources."
           printf '%s\n' "${SITES[@]}"
 
-      - name: Download targeted EPG
+      # แยกไฟล์ตามแหล่ง: epg/<site>.xml, .xml.gz, .json
+      - name: Download EPG per source
         working-directory: epg-engine
         shell: bash
         env:
@@ -117,25 +112,36 @@ jobs:
           set -euo pipefail
           mkdir -p "../$EPG_OUTPUT_DIR"
 
-          npm run grab --- \
-            --sites="$SITE_LIST" \
-            --output="../$EPG_OUTPUT_DIR/guide.xml" \
-            --gzip="../$EPG_OUTPUT_DIR/guide.xml.gz" \
-            --json="../$EPG_OUTPUT_DIR/guide.json" \
-            --days="$EPG_DAYS" \
-            --maxConnections="$MAX_CONNECTIONS"
+          IFS=',' read -ra SITES <<< "$SITE_LIST"
+          ok=0
+          for site in "${SITES[@]}"; do
+            echo "::group::grab $site"
+            if npm run grab -- \
+                --sites="$site" \
+                --output="../$EPG_OUTPUT_DIR/$site.xml" \
+                --gzip="../$EPG_OUTPUT_DIR/$site.xml.gz" \
+                --json="../$EPG_OUTPUT_DIR/$site.json" \
+                --days="$EPG_DAYS" \
+                --maxConnections="$MAX_CONNECTIONS"; then
+              ok=$((ok + 1))
+            else
+              echo "::warning::$site failed, skipped"
+              rm -f "../$EPG_OUTPUT_DIR/$site.xml" \
+                    "../$EPG_OUTPUT_DIR/$site.xml.gz" \
+                    "../$EPG_OUTPUT_DIR/$site.json"
+            fi
+            echo "::endgroup::"
+          done
 
-      # ตัดช่อง/รายการซ้ำ (ตาม tvg-id) แล้วบีบ gz ใหม่ให้ตรงกับ xml
-      - name: Remove duplicate channels and programmes
-        run: |
-          set -euo pipefail
-          python scripts/dedupe_epg.py "$EPG_OUTPUT_DIR/guide.xml"
-          gzip -9 -c "$EPG_OUTPUT_DIR/guide.xml" > "$EPG_OUTPUT_DIR/guide.xml.gz"
+          if [ "$ok" -eq 0 ]; then
+            echo "::error::All sources failed."
+            exit 1
+          fi
 
       - name: Validate generated EPG files
         run: |
           set -euo pipefail
-          python scripts/validate_epg.py epg
+          python scripts/validate_epg.py "$EPG_OUTPUT_DIR"
 
       - name: Show output sizes
         run: |
@@ -143,15 +149,13 @@ jobs:
           echo "EPG source configurations: ${{ steps.sources.outputs.count }}"
           echo "Requested days: $EPG_DAYS"
           echo "Maximum connections: $MAX_CONNECTIONS"
-          du -h epg/guide.xml epg/guide.xml.gz epg/guide.json
-          ls -lh epg/
+          ls -lh "$EPG_OUTPUT_DIR"/
 
       - name: Preserve generated files for publishing
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/world-epg-publish"
-          cp epg/guide.xml epg/guide.xml.gz epg/guide.json \
-            "$RUNNER_TEMP/world-epg-publish/"
+          cp "$EPG_OUTPUT_DIR"/* "$RUNNER_TEMP/world-epg-publish/"
 
       - name: Publish data branch
         shell: bash
@@ -166,11 +170,9 @@ jobs:
           git clean -fdx
 
           mkdir -p epg
-          cp "$RUNNER_TEMP/world-epg-publish/guide.xml" epg/
-          cp "$RUNNER_TEMP/world-epg-publish/guide.xml.gz" epg/
-          cp "$RUNNER_TEMP/world-epg-publish/guide.json" epg/
+          cp "$RUNNER_TEMP"/world-epg-publish/* epg/
 
-          git add epg/guide.xml epg/guide.xml.gz epg/guide.json
+          git add epg/
           git commit -m "Update targeted EPG data"
 
           git push origin HEAD:data --force
@@ -189,7 +191,9 @@ jobs:
             echo "- Data branch: \`data\`"
             echo ""
             echo "### Public guide URLs"
-            echo "- XML: https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/epg/guide.xml"
-            echo "- GZIP: https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/epg/guide.xml.gz"
-            echo "- JSON: https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/epg/guide.json"
+            for f in "$RUNNER_TEMP"/world-epg-publish/*.xml; do
+              [ -e "$f" ] || continue
+              n=$(basename "$f" .xml)
+              echo "- $n: https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/epg/$n.xml (also .xml.gz, .json)"
+            done
           } >> "$GITHUB_STEP_SUMMARY"

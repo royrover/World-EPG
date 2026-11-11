@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Validate generated XMLTV, GZIP and JSON EPG files.
+Validate per-source XMLTV, GZIP and JSON EPG files.
 
 Usage:
     python scripts/validate_epg.py epg
@@ -24,162 +24,116 @@ def warn(message):
     print(f"WARNING: {message}")
 
 
+DATETIME_RE = re.compile(r"^\d{14}(?:\s*[+-]\d{4})?$")
+
+
 def validate_xml(xml_file):
-    print("\n========== XMLTV VALIDATION ==========")
-
-    if not xml_file.is_file():
-        fail(f"XML file not found: {xml_file}")
-
     try:
-        tree = ET.parse(xml_file)
+        root = ET.parse(xml_file).getroot()
     except Exception as e:
-        fail(f"Cannot parse XML: {e}")
-
-    root = tree.getroot()
+        fail(f"{xml_file.name}: cannot parse XML: {e}")
 
     if root.tag != "tv":
-        fail(f"Invalid XMLTV root element: {root.tag}")
+        fail(f"{xml_file.name}: invalid XMLTV root element: {root.tag}")
 
     channels = root.findall("channel")
     programmes = root.findall("programme")
 
     if not channels:
-        fail("No channels found in XMLTV.")
-
+        fail(f"{xml_file.name}: no channels found.")
     if not programmes:
-        fail("No programmes found in XMLTV.")
+        fail(f"{xml_file.name}: no programmes found.")
 
     channel_ids = set()
-    unique_channels = []
-
     for channel in channels:
         channel_id = channel.get("id")
-
         if not channel_id:
-            fail("Channel found without id attribute.")
-
+            fail(f"{xml_file.name}: channel without id attribute.")
         if channel_id in channel_ids:
-            warn(f"Duplicate channel ID found and skipped: {channel_id}")
-            continue
-
+            warn(f"{xml_file.name}: duplicate channel id: {channel_id}")
         channel_ids.add(channel_id)
-        unique_channels.append(channel)
-
-    datetime_pattern = re.compile(r"^\d{14}(?:\s*[+-]\d{4})?$")
 
     for index, programme in enumerate(programmes, start=1):
-
         channel = programme.get("channel")
         start = programme.get("start")
         stop = programme.get("stop")
 
-        if not channel:
-            fail(f"Programme #{index} missing channel attribute.")
-
-        if not start:
-            fail(f"Programme #{index} missing start attribute.")
-
-        if not stop:
-            fail(f"Programme #{index} missing stop attribute.")
-
-        if not datetime_pattern.match(start):
-            fail(f"Invalid programme start time: {start}")
-
-        if not datetime_pattern.match(stop):
-            fail(f"Invalid programme stop time: {stop}")
-
+        if not channel or not start or not stop:
+            fail(f"{xml_file.name}: programme #{index} missing channel/start/stop.")
+        if not DATETIME_RE.match(start) or not DATETIME_RE.match(stop):
+            fail(f"{xml_file.name}: programme #{index} invalid time: {start} / {stop}")
         if channel not in channel_ids:
-            fail(f"Programme #{index} references unknown channel: " f"{channel}")
+            fail(f"{xml_file.name}: programme #{index} unknown channel: {channel}")
 
-    print(f"Channels (Total: {len(channels)}, Unique: {len(unique_channels)})")
-    print(f"Programmes: {len(programmes)}")
-    print("XMLTV structure: OK")
-
-    return len(unique_channels), len(programmes)
+    print(f"  XML: OK (channels={len(channel_ids)}, programmes={len(programmes)})")
+    return len(channel_ids), len(programmes)
 
 
 def validate_gzip(gzip_file, xml_file):
-    print("\n========== GZIP VALIDATION ==========")
-
     if not gzip_file.is_file():
-        fail(f"GZIP file not found: {gzip_file}")
+        fail(f"GZIP file not found: {gzip_file.name}")
 
     try:
         with gzip.open(gzip_file, "rb") as f:
             gzip_data = f.read()
-
         xml_data = xml_file.read_bytes()
-
     except Exception as e:
-        fail(f"Cannot read GZIP/XML: {e}")
+        fail(f"{gzip_file.name}: cannot read GZIP/XML: {e}")
 
     if not gzip_data:
-        fail("GZIP file is empty.")
-
+        fail(f"{gzip_file.name}: GZIP file is empty.")
     if gzip_data != xml_data:
-        fail("GZIP content does not match guide.xml.")
+        fail(f"{gzip_file.name}: content does not match {xml_file.name}.")
 
-    print(f"GZIP size: {gzip_file.stat().st_size:,} bytes")
-    print("GZIP content matches XML: OK")
+    print(f"  GZIP: OK ({gzip_file.stat().st_size:,} bytes)")
 
 
 def validate_json(json_file):
-    print("\n========== JSON VALIDATION ==========")
-
     if not json_file.is_file():
-        fail(f"JSON file not found: {json_file}")
+        fail(f"JSON file not found: {json_file.name}")
 
     try:
         with json_file.open("r", encoding="utf-8") as f:
             data = json.load(f)
-
     except Exception as e:
-        fail(f"Invalid JSON: {e}")
+        fail(f"{json_file.name}: invalid JSON: {e}")
 
     if not data:
-        fail("JSON file contains no data.")
-
+        fail(f"{json_file.name}: no data.")
     if not isinstance(data, (dict, list)):
-        fail("JSON root must be an object or array.")
+        fail(f"{json_file.name}: root must be an object or array.")
 
-    print(f"JSON size: {json_file.stat().st_size:,} bytes")
-    print(f"JSON root type: {type(data).__name__}")
-    print("JSON syntax: OK")
+    print(f"  JSON: OK ({json_file.stat().st_size:,} bytes)")
 
 
 def main():
-
     if len(sys.argv) != 2:
         print(f"Usage: python {sys.argv[0]} <epg_directory>")
         sys.exit(1)
 
     epg_dir = Path(sys.argv[1])
-
     if not epg_dir.is_dir():
         fail(f"EPG directory not found: {epg_dir}")
 
-    xml_file = epg_dir / "guide.xml"
-    gzip_file = epg_dir / "guide.xml.gz"
-    json_file = epg_dir / "guide.json"
+    xml_files = sorted(epg_dir.glob("*.xml"))
+    if not xml_files:
+        fail(f"No .xml files found in {epg_dir}")
 
-    print("======================================")
-    print("      WORLD EPG FILE VALIDATOR")
-    print("======================================")
-
-    channels, programmes = validate_xml(xml_file)
-
-    validate_gzip(gzip_file, xml_file)
-
-    validate_json(json_file)
+    total_ch = total_pg = 0
+    for xml_file in xml_files:
+        print(f"\n##### {xml_file.name} #####")
+        ch, pg = validate_xml(xml_file)
+        validate_gzip(xml_file.with_name(xml_file.name + ".gz"), xml_file)
+        validate_json(xml_file.with_suffix(".json"))
+        total_ch += ch
+        total_pg += pg
 
     print("\n======================================")
     print("      ALL VALIDATIONS PASSED")
     print("======================================")
-    print(f"Channels: {channels}")
-    print(f"Programmes: {programmes}")
-    print("XML: OK")
-    print("GZIP: OK")
-    print("JSON: OK")
+    print(f"Sources: {len(xml_files)}")
+    print(f"Channels: {total_ch}")
+    print(f"Programmes: {total_pg}")
 
 
 if __name__ == "__main__":
