@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 Validate generated XMLTV, GZIP and JSON EPG files.
@@ -19,6 +18,10 @@ from pathlib import Path
 def fail(message):
     print(f"ERROR: {message}")
     sys.exit(1)
+
+
+def warn(message):
+    print(f"WARNING: {message}")
 
 
 def validate_xml(xml_file):
@@ -47,6 +50,7 @@ def validate_xml(xml_file):
         fail("No programmes found in XMLTV.")
 
     channel_ids = set()
+    unique_channels = []
 
     for channel in channels:
         channel_id = channel.get("id")
@@ -55,13 +59,13 @@ def validate_xml(xml_file):
             fail("Channel found without id attribute.")
 
         if channel_id in channel_ids:
-            fail(f"Duplicate channel ID found: {channel_id}")
+            warn(f"Duplicate channel ID found and skipped: {channel_id}")
+            continue
 
         channel_ids.add(channel_id)
+        unique_channels.append(channel)
 
-    datetime_pattern = re.compile(
-        r"^\d{14}(?:\s*[+-]\d{4})?$"
-    )
+    datetime_pattern = re.compile(r"^\d{14}(?:\s*[+-]\d{4})?$")
 
     for index, programme in enumerate(programmes, start=1):
 
@@ -85,16 +89,13 @@ def validate_xml(xml_file):
             fail(f"Invalid programme stop time: {stop}")
 
         if channel not in channel_ids:
-            fail(
-                f"Programme #{index} references unknown channel: "
-                f"{channel}"
-            )
+            fail(f"Programme #{index} references unknown channel: " f"{channel}")
 
-    print(f"Channels: {len(channels)}")
+    print(f"Channels (Total: {len(channels)}, Unique: {len(unique_channels)})")
     print(f"Programmes: {len(programmes)}")
     print("XMLTV structure: OK")
 
-    return len(channels), len(programmes)
+    return len(unique_channels), len(programmes)
 
 
 def validate_gzip(gzip_file, xml_file):
@@ -162,7 +163,7 @@ def main():
     json_file = epg_dir / "guide.json"
 
     print("======================================")
-    print("       WORLD EPG FILE VALIDATOR")
+    print("      WORLD EPG FILE VALIDATOR")
     print("======================================")
 
     channels, programmes = validate_xml(xml_file)
@@ -172,7 +173,7 @@ def main():
     validate_json(json_file)
 
     print("\n======================================")
-    print("       ALL VALIDATIONS PASSED")
+    print("      ALL VALIDATIONS PASSED")
     print("======================================")
     print(f"Channels: {channels}")
     print(f"Programmes: {programmes}")
