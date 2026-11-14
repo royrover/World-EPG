@@ -2,8 +2,8 @@ name: Update World EPG
 
 on:
   schedule:
-    # รันทุกๆ 24 ชั่วโมง (เวลา 00:20 UTC หรือ 07:20 ไทย)
-    - cron: "20 0 * * *"
+    # รันเวลา 17:30 UTC หรือ 00:30 น. (เที่ยงคืนครึ่ง) ตามเวลาประเทศไทย
+    - cron: "30 17 * * *"
   workflow_dispatch:
     inputs:
       days:
@@ -184,7 +184,7 @@ jobs:
           {
             echo "## EPG Update Summary"
             echo ""
-            echo "- Schedule: every 24 hours"
+            echo "- Schedule: every 24 hours (00:30 ICT / 17:30 UTC)"
             echo "- Sources discovered: ${{ steps.sources.outputs.count || 'not available' }}"
             echo "- Requested days: $EPG_DAYS"
             echo "- Maximum connections: $MAX_CONNECTIONS"
